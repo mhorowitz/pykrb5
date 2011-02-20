@@ -63,6 +63,16 @@ If the value contains no realm, then default_realm will be used."""
         if type is not None:
             self.type = type
 
+    def __eq__(self, other):
+        if isinstance(other, basestring):
+            other = Principal(other)
+
+        return (self.type == constants.PrincipalNameType.unknown or \
+                other.type == constants.PrincipalNameType.unknown or \
+                self.type == other.type) and \
+            self.components == other.components and \
+            self.realm == other.realm
+
     def __str__(self):
         def quote_component(comp):
             return re.sub(r'([\\/@])', r'\\\1', comp)
