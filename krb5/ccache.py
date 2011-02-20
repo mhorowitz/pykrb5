@@ -10,7 +10,15 @@ from . import constants
 from . import session
 from . import types
 
-class File(object):
+class CredentialCache(object):
+    def find_first_session(self, service):
+        for s in self.sessions:
+            if s.service == service:
+                return s
+        else:
+            return None
+
+class File(CredentialCache):
     def __init__(self, path):
         self.path = path
         self.name = "FILE:" + self.path
@@ -23,7 +31,7 @@ class File(object):
 
     def destroy(self):
         # TODO marc: write over the data before removing.
-        os.remove(path)
+        os.remove(self.path)
 
     def store(self, session):
         with self._locked_file('r+b') as f:
@@ -127,7 +135,7 @@ class File(object):
 
             s = session.ApplicationSession()
             s.client = self._read_principal(file)
-            s.server = self._read_principal(file)
+            s.service = self._read_principal(file)
             s.key = self._read_key(file)
             s.auth_time = self._read_time(file)
             s.start_time = self._read_time(file)

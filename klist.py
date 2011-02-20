@@ -13,7 +13,7 @@ print "{0:{align}}  {1:{align}}  {2:{align}}".format(
 for s in fcc.sessions:
     print "{0}  {1}  {2}".format(
         s.start_time.strftime(TIME_FORMAT), s.end_time.strftime(TIME_FORMAT),
-        s.server)
+        s.service)
     print "\trenew until {0}".format(s.renew_until.strftime(TIME_FORMAT))
     print "\tFlags: {0}".format(
         ", ".join([f.enumname for f in s.ticket_flags]))

@@ -3,11 +3,11 @@ from . import types
 
 class Session(object):
     # This is the abstract data which represents a session between a
-    # client and service.  The kdc, client, and server all see it.
+    # client and service.  The kdc, client, and service all see it.
 
     def __init__(self):
         self.client = None
-        self.server = None
+        self.service = None
         self.u2u_ticket = None
         self.key = None
         self.auth_time = None
@@ -33,8 +33,8 @@ class ApplicationSession(Session):
         self.ap_options = constants.APOptions()
         self.client_subkey = None
         self.client_seqno = None
-        self.server_seqno = None
-        self.server_subkey = None
+        self.service_seqno = None
+        self.service_subkey = None
         self.client_authorization_data = []
 
     # ap options, subkey (one per direction), sequence number
