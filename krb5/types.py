@@ -1,7 +1,9 @@
+import datetime
 import re
 import struct
 
 from pyasn1.codec.der import decoder, encoder
+from pyasn1.type import useful
 
 from . import asn1
 from . import constants
@@ -33,7 +35,11 @@ If the value contains no realm, then default_realm will be used."""
         if value is None:
             return
 
-        if isinstance(value, basestring):
+        if isinstance(value, Principal):
+            self.type = value.type
+            self.components = value.components[:]
+            self.realm = value.realm
+        elif isinstance(value, basestring):
             m = re.match(r'((?:[^\\]|\\.)+?)(@((?:[^\\@]|\\.)+))?$', value)
             if not m:
                 raise KerberosException("invalid principal syntax")
@@ -70,7 +76,8 @@ If the value contains no realm, then default_realm will be used."""
         return (self.type == constants.PrincipalNameType.unknown or \
                 other.type == constants.PrincipalNameType.unknown or \
                 self.type == other.type) and \
-            self.components == other.components and \
+            all(map(lambda a,b: a == b,
+                    self.components, other.components)) and \
             self.realm == other.realm
 
     def __str__(self):
@@ -94,6 +101,16 @@ If the value contains no realm, then default_realm will be used."""
         self.components = [
             str(c) for c in name.getComponentByName('name-string')]
         self.realm = str(data.getComponentByName(realm_component))
+        return self
+
+    def components_to_asn1(self, name):
+        name.setComponentByName('name-type', int(self.type))
+        strings = name.setComponentByName('name-string'
+                                          ).getComponentByName('name-string')
+        for i, c in enumerate(self.components):
+            strings.setComponentByPosition(i, c)
+
+        return name
 
 class Address(object):
     DIRECTIONAL_AP_REQ_SENDER = struct.pack('!I', 0)
@@ -134,16 +151,6 @@ class Address(object):
         # ipv4-mapped ipv6 addresses must be encoded as ipv4.
         pass
 
-class Key(object):
-    def __init__(self):
-        self.etype = None
-        self.data = None
-
-    def __str__(self):
-        return str((self.etype, "{0} octets".format(len(self.data))))
-
-    # This is gonna need a few more methods someday.
-
 class EncryptedData(object):
     def __init__(self):
         self.etype = None
@@ -153,8 +160,17 @@ class EncryptedData(object):
     def from_asn1(self, data):
         data = _asn1_decode(data, asn1.EncryptedData())
         self.etype = constants.EncType(data.getComponentByName('etype'))
-        self.kvno = int(data.getComponentByName('kvno'))
+        kvno = data.getComponentByName('kvno')
+        self.kvno = kvno and int(kvno)
         self.ciphertext = str(data.getComponentByName('cipher'))
+        return self
+
+    def to_asn1(self, component):
+        component.setComponentByName('etype', int(self.etype))
+        if self.kvno:
+            component.setComponentByName('kvno', self.kvno)
+        component.setComponentByName('cipher', self.ciphertext)
+        return component
 
 class Ticket(object):
     def __init__(self):
@@ -171,10 +187,48 @@ class Ticket(object):
         self.service_principal.from_asn1(data, 'realm', 'sname')
         self.encrypted_part = EncryptedData()
         self.encrypted_part.from_asn1(data.getComponentByName('enc-part'))
+        return self
+
+    def to_asn1(self, component):
+        component.setComponentByName('tkt-vno', 5)
+        component.setComponentByName('realm', self.service_principal.realm)
+        asn1.seq_set(component, 'sname',
+                     self.service_principal.components_to_asn1)
+        asn1.seq_set(component, 'enc-part', self.encrypted_part.to_asn1)
+        return component
 
     def __str__(self):
         return "<Ticket for {0} vno {1}>".format(self.service_principal,
                                                  self.encrypted_part.kvno)
+
+class KerberosTime(object):
+    INDEFINITE = datetime.datetime.fromtimestamp(0)
+
+    @staticmethod
+    def to_asn1(dt):
+        # A KerberosTime is really just a string, so we can return a
+        # string here, and the asn1 library will convert it correctly.
+
+        return "{year:04}{month:02}{day:02}{hour:02}{minute:02}{second:02}Z".format(
+            year=dt.year,
+            month=dt.month,
+            day=dt.day,
+            hour=dt.hour,
+            minute=dt.minute,
+            second=dt.second,
+            msec=int(dt.microsecond * 1000))
+
+    @staticmethod
+    def from_asn1(data):
+        data = str(data)
+        year = int(data[0:4])
+        month = int(data[4:6])
+        day = int(data[6:8])
+        hour = int(data[8:10])
+        minute = int(data[10:12])
+        second = int(data[12:14])
+        assert data[14] == 'Z'
+        return datetime.datetime(year, month, day, hour, minute, second)
 
 if __name__ == '__main__':
     # TODO marc: turn this into a real test

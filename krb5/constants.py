@@ -72,6 +72,45 @@ class Flags(RestrictedSet):
             if mask & (1 << (31 - int(f))) != 0:
                 self.add(f)
 
+    def to_bit_tuple(self):
+        """The return value is implicitly padded out to 32 elements"""
+        if len(self) == 0:
+            return (0,) * 32
+
+        max_value = max(int(f) for f in self)
+
+        return tuple(1 if self.allowed_values(b) in self else 0
+                     for b in xrange(0, max(32, max_value + 1)))
+
+    def from_bit_iter(self, bt):
+        self.clear()
+        for i, v in enumerate(bt):
+            if v == 1:
+                self.add(self.allowed_values(i))
+        return self
+
+    def to_asn1(self, component):
+        return component.clone(self.to_bit_tuple())
+
+    def from_asn1(self, component):
+        return self.from_bit_iter(component)
+
+class Asn1Tags(flufl.enum.Enum):
+    ticket = 1
+    authenticator = 2
+    as_req = 10
+    as_rep = 11
+    tgs_req = 12
+    tgs_rep = 13
+    ap_req = 14
+    ap_rep = 15
+    enc_tgs_rep_part = 26
+    krb_error = 30
+
+class PreauthTypes(flufl.enum.Enum):
+    tgs_req = 1
+    enc_timestamp = 2
+
 class TicketFlag(flufl.enum.Enum):
     reserved = 0
     forwardable = 1
@@ -87,10 +126,24 @@ class TicketFlag(flufl.enum.Enum):
     hw_authent = 11
     transited_policy_checked = 12
     ok_as_delegate = 13
+    # the rest aren't in the spec, but are in MIT's source tree.
+    enc_pa_rep = 15
+    anonymous = 16
+    
 
 class TicketFlags(Flags):
     def __init__(self):
         Flags.__init__(self, TicketFlag)
+
+class KDCOption(flufl.enum.Enum):
+    forwardable = 1
+    proxiable = 3
+    renewable = 8
+    pass
+
+class KDCOptions(Flags):
+    def __init__(self):
+        Flags.__init__(self, KDCOption)
 
 class APOption(flufl.enum.Enum):
     pass
@@ -150,3 +203,84 @@ class EncType(flufl.enum.Enum):
     rc4_hmac = 23
     rc4_hmac_exp = 24
     subkey_keymaterial = 65
+
+class ChecksumType(flufl.enum.Enum):
+    rsa_md5_des = 8
+
+class KeyUsageValue(flufl.enum.Enum):
+    tgs_req_auth_data_session = 4
+    tgs_req_auth_data_subkey = 5
+    pa_tgs_req_checksum = 6
+    pa_tgs_req_authenticator = 7
+    tgs_rep_session = 8
+    tgs_rep_subkey = 9
+
+class ErrorCode(flufl.enum.Enum):
+    kdc_err_none = 0
+    kdc_err_name_exp = 1
+    kdc_err_service_exp = 2
+    kdc_err_bad_pvno = 3
+    kdc_err_c_old_mast_kvno = 4
+    kdc_err_s_old_mast_kvno = 5
+    kdc_err_c_principal_unknown = 6
+    kdc_err_s_principal_unknown = 7
+    kdc_err_principal_not_unique = 8
+    kdc_err_null_key = 9
+    kdc_err_cannot_postdate = 10
+    kdc_err_never_valid = 11
+    kdc_err_policy = 12
+    kdc_err_badoption = 13
+    kdc_err_etype_nosupp = 14
+    kdc_err_sumtype_nosupp = 15
+    kdc_err_padata_type_nosupp = 16
+    kdc_err_trtype_nosupp = 17
+    kdc_err_client_revoked = 18
+    kdc_err_service_revoked = 19
+    kdc_err_tgt_revoked = 20
+    kdc_err_client_notyet = 21
+    kdc_err_service_notyet = 22
+    kdc_err_key_expired = 23
+    kdc_err_preauth_failed = 24
+    kdc_err_preauth_required = 25
+    kdc_err_server_nomatch = 26
+    kdc_err_must_use_user2user = 27
+    kdc_err_path_not_accepted = 28
+    kdc_err_svc_unavailable = 29
+    krb_ap_err_bad_integrity = 31
+    krb_ap_err_tkt_expired = 32
+    krb_ap_err_tkt_nyv = 33
+    krb_ap_err_repeat = 34
+    krb_ap_err_not_us = 35
+    krb_ap_err_badmatch = 36
+    krb_ap_err_skew = 37
+    krb_ap_err_badaddr = 38
+    krb_ap_err_badversion = 39
+    krb_ap_err_msg_type = 40
+    krb_ap_err_modified = 41
+    krb_ap_err_badorder = 42
+    krb_ap_err_badkeyver = 44
+    krb_ap_err_nokey = 45
+    krb_ap_err_mut_fail = 46
+    krb_ap_err_baddirection = 47
+    krb_ap_err_method = 48
+    krb_ap_err_badseq = 49
+    krb_ap_err_inapp_cksum = 50
+    krb_ap_path_not_accepted = 51
+    krb_err_response_too_big = 52
+    krb_err_generic = 60
+    krb_err_field_toolong = 61
+    kdc_error_client_not_trusted = 62
+    kdc_error_kdc_not_trusted = 63
+    kdc_error_invalid_sig = 64
+    kdc_err_key_too_weak = 65
+    kdc_err_certificate_mismatch = 66
+    krb_ap_err_no_tgt = 67
+    kdc_err_wrong_realm = 68
+    krb_ap_err_user_to_user_required = 69
+    kdc_err_cant_verify_certificate = 70
+    kdc_err_invalid_certificate = 71
+    kdc_err_revoked_certificate = 72
+    kdc_err_revocation_status_unknown = 73
+    kdc_err_revocation_status_unavailable = 74
+    kdc_err_client_name_mismatch = 75
+    kdc_err_kdc_name_mismatch = 76

@@ -1,1 +1,10 @@
 Work in progress.  If you're interested, contact me.
+
+--
+
+Dependencies:
+
+easy_install pyDes (2.0.1)
+easy_install pyasn1 (0.0.12a)
+easy_install flufl.enum (3.0.1)
+

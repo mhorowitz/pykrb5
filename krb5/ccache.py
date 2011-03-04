@@ -7,6 +7,7 @@ import struct
 import datetime
 
 from . import constants
+from . import crypto
 from . import session
 from . import types
 
@@ -145,13 +146,16 @@ class File(CredentialCache):
             s.ticket_flags = self._read_ticket_flags(file)
             s.addresses = self._read_addresses(file)
             self._read_authdata(file)
-            s.ticket = types.Ticket()
-            s.ticket.from_asn1(self._read_data(file))
-            s.u2u_ticket = types.Ticket()
+            # TODO marc: I don't know what to do with this yet, but it
+            # sure isn't a ticket.
+            ticket_data = self._read_data(file)
+            if s.service.realm != "X-CACHECONF:":
+                s.ticket = types.Ticket().from_asn1(ticket_data)
             u2u_data = self._read_data(file)
             if u2u_data:
-                s.u2u_ticket.from_asn1(u2u_data)
-            sessions.append(s)
+                s.u2u_ticket = types.Ticket().from_asn1(u2u_data)
+            if s.service.realm != "X-CACHECONF:":
+                sessions.append(s)
 
         return header, principal, sessions
 
@@ -207,8 +211,12 @@ class File(CredentialCache):
 
     @staticmethod
     def _read_key(file):
-        key = types.Key()
-        key.etype = constants.EncType(File._read_unpack(file, '!H')[0])
+        key = crypto.Key()
+        v = File._read_unpack(file, '!H')[0]
+        try:
+            key.etype = constants.EncType(v)
+        except ValueError:
+            key.etype = v
         key.data = File._read_data(file)
         return key
 

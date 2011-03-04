@@ -1,1 +1,2 @@
-__all__ = ['asn1', 'ccache', 'constants', 'session', 'types']
+__all__ = ['asn1', 'ccache', 'client', 'constants', 'crypto', 'engine',
+           'network', 'session', 'types']

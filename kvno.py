@@ -1,13 +1,10 @@
-import os
 import sys
 
-import krb5.ccache
+import krb5.client
 
-fcc = krb5.ccache.resolve(os.getenv('KRB5CCNAME'))
+if __name__ == '__main__':
+    client = krb5.client.Client()
+    session = client.get_session(sys.argv[1])
 
-for s in fcc.sessions:
-    if str(s.server) == sys.argv[1]:
-        print "{0}: kvno = {1}".format(s.server, s.ticket.encrypted_part.kvno)
-        break
-else:
-    print "Key not in ccache"
+    print "{0}: kvno = {1}".format(session.service,
+                                   session.ticket.encrypted_part.kvno)

@@ -2,6 +2,7 @@ import os
 
 from . import ccache
 from . import engine
+from . import network
 from . import types
 
 class Client(object):
@@ -14,6 +15,8 @@ class Client(object):
             self.ccache = cc
 
     def get_session(self, service):
+        service = types.Principal(service)
+
         session = self.ccache.find_first_session(service)
         if session:
             return session
@@ -22,22 +25,24 @@ class Client(object):
 
         client_tgs = types.Principal(("krbtgt", me.realm, me.realm))
         client_tgt = self.ccache.find_first_session(client_tgs)
-        if client_tgt not None:
-            raise KerberosException(
-                "No ticket granting ticket for client {0}".format(me))
+        if client_tgt is None:
+            raise types.KerberosException(
+                "No ticket granting ticket {0} for client {1}".format(
+                    client_tgs, me))
 
         other_tgts = []
         # With referrals, we can't know in advance which tgts will be
         # needed, so we just pass them all down.
         if client_tgt.client.realm != service.realm:
-            other_tgts = [s for s in self.ccache.sessions
-                          if s.service.components[0] == "krbtgt"]
+            other_tgts += (s for s in self.ccache.sessions
+                           if s.service.components[0] == "krbtgt")
 
         service_session, new_tgts = engine.get_service(
-            client_tgt, service, other_tgts)
+            network.KDCConnectionFactory(), client_tgt, service, other_tgts)
 
-        for s in new_tgts:
-            self.ccache.store(s)
-        self.ccache.store(service_session)
+#        for s in new_tgts:
+#            self.ccache.store(s)
+#        if service_session is not None:
+#            self.ccache.store(service_session)
 
         return service_session
