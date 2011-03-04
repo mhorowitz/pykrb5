@@ -202,7 +202,7 @@ class Ticket(object):
                                                  self.encrypted_part.kvno)
 
 class KerberosTime(object):
-    INDEFINITE = datetime.datetime.fromtimestamp(0)
+    INDEFINITE = datetime.datetime(1970, 1, 1, 0, 0, 0)
 
     @staticmethod
     def to_asn1(dt):

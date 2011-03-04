@@ -77,9 +77,6 @@ def _make_tgs_req_bytes(client_session, service, subkey=None):
         'padata-value': encoder.encode(ap_req)
         })
 
-    print tgs_req, ap_req, authenticator
-    print repr(encoder.encode(tgs_req))
-
     return encoder.encode(tgs_req)
 
 def _parse_tgs_rep_bytes(bytes, client_session, subkey=None):
