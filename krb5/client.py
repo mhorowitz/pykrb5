@@ -17,14 +17,16 @@ class Client(object):
     def get_session(self, service):
         service = types.Principal(service)
 
-        session = self.ccache.find_first_session(service)
+        session = next((s for s in self.ccache.sessions
+                        if s.service == service), None)
         if session:
             return session
 
         me = self.ccache.principal
 
         client_tgs = types.Principal(("krbtgt", me.realm, me.realm))
-        client_tgt = self.ccache.find_first_session(client_tgs)
+        client_tgt = next((s for s in self.ccache.sessions
+                           if s.service == client_tgs), None)
         if client_tgt is None:
             raise types.KerberosException(
                 "No ticket granting ticket {0} for client {1}".format(

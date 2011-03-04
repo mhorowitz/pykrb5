@@ -227,7 +227,8 @@ class KerberosTime(object):
         hour = int(data[8:10])
         minute = int(data[10:12])
         second = int(data[12:14])
-        assert data[14] == 'Z'
+        if data[14] != 'Z':
+            raise types.KerberosException("timezone in KerberosTime is not Z")
         return datetime.datetime(year, month, day, hour, minute, second)
 
 if __name__ == '__main__':

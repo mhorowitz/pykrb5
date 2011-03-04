@@ -11,15 +11,7 @@ from . import crypto
 from . import session
 from . import types
 
-class CredentialCache(object):
-    def find_first_session(self, service):
-        for s in self.sessions:
-            if s.service == service:
-                return s
-        else:
-            return None
-
-class File(CredentialCache):
+class File(object):
     def __init__(self, path):
         self.path = path
         self.name = "FILE:" + self.path

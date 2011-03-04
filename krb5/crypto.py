@@ -113,7 +113,7 @@ class Key(object):
                 "keyvalue": self.data}
 
     def from_asn1(self, data):
-        self.etype = data.getComponentByName("keytype")
+        self.etype = constants.EncType(data.getComponentByName("keytype"))
         self.data = data.getComponentByName("keyvalue")
         return self
 

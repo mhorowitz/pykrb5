@@ -19,13 +19,17 @@ def _make_tgs_req_bytes(client_session, service, subkey=None):
     req_body = asn1.seq_set(tgs_req, 'req-body')
     opts = constants.KDCOptions()
     asn1.seq_set_flags(req_body, 'kdc-options', opts)
-    asn1.seq_set(req_body, 'cname', client_session.client.components_to_asn1)
-    req_body.setComponentByName('realm', client_session.client.realm)
+    # cname only in ASReq
+    # asn1.seq_set(req_body, 'cname', client_session.client.components_to_asn1)
+    req_body.setComponentByName('realm', service.realm)
     asn1.seq_set(req_body, 'sname', service.components_to_asn1)
     req_body.setComponentByName('till', types.KerberosTime.to_asn1(
         types.KerberosTime.INDEFINITE))
     req_body.setComponentByName('nonce', _make_nonce())
-    asn1.seq_set_iter(req_body, 'etype', (int(constants.EncType.des_cbc_crc),))
+    # TODO marc: make the etype list a parameter
+    asn1.seq_set_iter(req_body, 'etype',
+                      (int(constants.EncType.des_cbc_crc),
+                       int(constants.EncType.des3_cbc_sha1_kd)))
 
     # This is an annoying problem.  I don't know if this is an
     # ambiguity in the spec, or just a pyasn1 api impedance mismatch.
@@ -113,8 +117,15 @@ def do_tgs_exchange(connections, client_session, service, subkey=None):
         if isinstance(parsed, asn1.KrbError):
             # TODO marc: if one kdc gives us an error, do we retry, or
             # give up?  For now, give up.
-            raise types.KerberosException(constants.ErrorCode(
-                parsed.getComponentByName('error-code')).enumname)
+            code = constants.ErrorCode(
+                parsed.getComponentByName('error-code')).enumname
+            etext = parsed.getComponentByName('e-text')
+            if etext is not None:
+                etext = str(etext).rstrip("\0")
+            if etext:
+                raise types.KerberosException("{0} ({1})".format(code, etext))
+            else:
+                raise types.KerberosException(code)
 
         tgs_rep, enc_tgs_rep_part = parsed
         s = session.ApplicationSession()
@@ -164,7 +175,7 @@ def get_service(connection_factory, client_tgt, service, other_tgts):
             do_tgs_exchange(
                 connection_factory.get_connections(client_tgt.client.realm),
                 client_tgt, service_tgs)
-        if service_tgt is not Null:
+        if service_tgt is not None:
             other_sessions.append(service_tgt)
 
     return (
