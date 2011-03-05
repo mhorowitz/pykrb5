@@ -126,7 +126,7 @@ class File(object):
                 break
             file.seek(-1, os.SEEK_CUR)
 
-            s = session.ApplicationSession()
+            s = session.KDCSession()
             s.client = self._read_principal(file)
             s.service = self._read_principal(file)
             s.key = self._read_key(file)

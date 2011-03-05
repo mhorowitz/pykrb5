@@ -3,6 +3,7 @@ import os
 from . import ccache
 from . import engine
 from . import network
+from . import session
 from . import types
 
 class Client(object):
@@ -14,13 +15,16 @@ class Client(object):
         else:
             self.ccache = cc
 
-    def get_session(self, service):
+    def get_principal(self):
+        return self.ccache.principal
+
+    def get_kdc_session(self, service):
         service = types.Principal(service)
 
-        session = next((s for s in self.ccache.sessions
+        kdc_session = next((s for s in self.ccache.sessions
                         if s.service == service), None)
-        if session:
-            return session
+        if kdc_session:
+            return kdc_session
 
         me = self.ccache.principal
 
@@ -39,7 +43,7 @@ class Client(object):
             other_tgts += (s for s in self.ccache.sessions
                            if s.service.components[0] == "krbtgt")
 
-        service_session, new_tgts = engine.get_service(
+        kdc_session, new_tgts = engine.get_service(
             network.KDCConnectionFactory(), client_tgt, service, other_tgts)
 
 #        for s in new_tgts:
@@ -47,4 +51,7 @@ class Client(object):
 #        if service_session is not None:
 #            self.ccache.store(service_session)
 
-        return service_session
+        return kdc_session
+
+    def get_session(self, service):
+        return session.ApplicationSession(self.get_kdc_session(service))

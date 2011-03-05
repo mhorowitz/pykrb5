@@ -1,3 +1,8 @@
+import datetime
+
+from pyasn1.codec.der import decoder, encoder
+
+from . import asn1
 from . import constants
 from . import types
 
@@ -18,7 +23,50 @@ class Session(object):
         self.addresses = []
         self.ticket = types.Ticket()
 
-class ClientSession(Session):
+    def _copy_from(self, other):
+        self.client = other.client
+        self.service = other.service
+        self.u2u_ticket = other.u2u_ticket
+        self.key = other.key
+        self.auth_time = other.auth_time
+        self.start_time = other.start_time
+        self.end_time = other.end_time
+        self.renew_until = other.renew_until
+        self.ticket_flags = other.ticket_flags
+        self.addresses = other.addresses
+        self.ticket = other.ticket
+
+    def make_ap_req_bytes(self, auth_key_usage,
+                          subkey=None, checksum=None):
+        now = datetime.datetime.utcnow()
+
+        authenticator = asn1.Authenticator()
+        authenticator.setComponentByName('authenticator-vno', 5)
+        authenticator.setComponentByName('crealm', self.client.realm)
+        asn1.seq_set(authenticator, 'cname',
+                     self.client.components_to_asn1)
+        if checksum is not None:
+            asn1.seq_set_dict(authenticator, 'cksum', checksum)
+        authenticator.setComponentByName('cusec', now.microsecond)
+        authenticator.setComponentByName('ctime',
+                                         types.KerberosTime.to_asn1(now))
+        if subkey is not None:
+            asn1.seq_set_dict(authenticator, 'subkey', subkey.to_asn1())
+
+        encoder.encode(authenticator)
+
+        ap_req = asn1.APReq()
+        ap_req.setComponentByName('pvno', 5)
+        ap_req.setComponentByName('msg-type', int(constants.Asn1Tags.ap_req))
+        asn1.seq_set_flags(ap_req, 'ap-options', constants.APOptions())
+        asn1.seq_set(ap_req, 'ticket', self.ticket.to_asn1)
+        asn1.seq_set_dict(ap_req, 'authenticator', 
+                          self.key.encrypt_as_asn1(
+                              auth_key_usage, encoder.encode(authenticator)))
+
+        return encoder.encode(ap_req)
+
+class KDCSession(Session):
     # This is the full set of stuff shared between the kdc and client.
 
     def __init__(self):
@@ -28,8 +76,9 @@ class ClientSession(Session):
 class ApplicationSession(Session):
     # This is the full set of stuff shared between the client and service.
 
-    def __init__(self):
+    def __init__(self, client_session):
         Session.__init__(self)
+        self._copy_from(client_session)
         self.ap_options = constants.APOptions()
         self.client_subkey = None
         self.client_seqno = None
@@ -37,8 +86,18 @@ class ApplicationSession(Session):
         self.service_subkey = None
         self.client_authorization_data = []
 
-    # ap options, subkey (one per direction), sequence number
-    # (one per direction), client authz data.
+    def make_ap_req_bytes(self, checksum_data=None, subkey=None):
+        checksum = None
+        if checksum_data is not None:
+            checksum = self.key.make_checksum_as_asn1(
+                constants.KeyUsageValue.ap_req_checksum, checksum_data)
+
+        return Session.make_ap_req_bytes(
+            self, constants.KeyUsageValue.ap_req_authenticator,
+            checksum=checksum, subkey=subkey)
+
+    def consume_ap_rep_bytes(self, bytes):
+        pass
 
 class ServiceApplicationSession(ApplicationSession):
     # The service gets to see some stuff from the ticket which client
@@ -74,13 +133,13 @@ class ServiceApplicationSession(ApplicationSession):
 
 # basic operations:
 
-# password -> ClientSession with kdc [tgs]
+# password -> KDCSession with kdc [tgs]
 
-# tgs -> ClientSession with service
+# tgs -> KDCSession with service
 
-# tgs + other-client-ticket -> u2u ClientSession
+# tgs + other-client-ticket -> u2u KDCSession
 
-# ClientSession -> ApplicationSession (one-way or mutual)
+# KDCSession -> ApplicationSession (one-way or mutual)
 
 # ApplicationSessibon + data -> safe, priv
 

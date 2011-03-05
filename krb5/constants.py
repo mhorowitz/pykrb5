@@ -136,17 +136,36 @@ class TicketFlags(Flags):
         Flags.__init__(self, TicketFlag)
 
 class KDCOption(flufl.enum.Enum):
+    reserved = 0
     forwardable = 1
+    forwarded = 2
     proxiable = 3
+    proxy = 4
+    allow_postdate = 5
+    postdated = 6
+    unused7 = 7
     renewable = 8
-    pass
+    unused9 = 9
+    unused10 = 10
+    opt_hardware_auth = 11
+    unused12 = 12
+    unused13 = 13
+    unused14 = 14
+    unused15 = 15
+    disable_transited_check = 26
+    renewable_ok = 27
+    enc_tkt_in_skey = 28
+    renew = 30
+    validate = 31
 
 class KDCOptions(Flags):
     def __init__(self):
         Flags.__init__(self, KDCOption)
 
 class APOption(flufl.enum.Enum):
-    pass
+    reserved = 0
+    use_session_key = 1
+    mutual_required = 2
 
 class APOptions(Flags):
     def __init__(self):
@@ -214,6 +233,8 @@ class KeyUsageValue(flufl.enum.Enum):
     pa_tgs_req_authenticator = 7
     tgs_rep_session = 8
     tgs_rep_subkey = 9
+    ap_req_checksum = 10
+    ap_req_authenticator = 11
 
 class ErrorCode(flufl.enum.Enum):
     kdc_err_none = 0
