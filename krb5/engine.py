@@ -40,7 +40,7 @@ def _make_tgs_req_bytes(client_session, service, subkey=None):
     # computes a checksum without the context tag, but if I naively
     # encode the req-body and checksum it, that includes both tags, so
     # the KDC fails checksum verification.  Empirically, I can clone
-    # the req-body with an overriding tag-set, and it all works ok.
+    # the req-body with an overriding tagSet, and it all works ok.
 
     req_body_like_the_kdc_wants_it = req_body.clone(
         tagSet=asn1.KDCReqBody.tagSet, cloneValueFlag=True)
