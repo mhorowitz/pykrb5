@@ -11,6 +11,105 @@ from . import types
 class ValidationException(types.KerberosException):
     pass
 
+"""
+      We first define a primitive called n-folding, which takes a
+      variable-length input block and produces a fixed-length output
+      sequence.  The intent is to give each input bit approximately
+      equal weight in determining the value of each output bit.  Note
+      that whenever we need to treat a string of octets as a number, the
+      assumed representation is Big-Endian -- Most Significant Byte
+      first.
+
+      To n-fold a number X, replicate the input value to a length that
+      is the least common multiple of n and the length of X.  Before
+      each repetition, the input is rotated to the right by 13 bit
+      positions.  The successive n-bit chunks are added together using
+      1's-complement addition (that is, with end-around carry) to yield
+      a n-bit result....
+"""
+
+# Assume input and output are multiples of 8 bits.  The _nfold
+# function is based on the MIT krb5_nfold C implementation:
+# 
+# Copyright (C) 1998 by the FundsXpress, INC.
+# 
+# All rights reserved.
+# 
+# Export of this software from the United States of America may require
+# a specific license from the United States Government.  It is the
+# responsibility of any person or organization contemplating export to
+# obtain such a license before exporting.
+# 
+# WITHIN THAT CONSTRAINT, permission to use, copy, modify, and
+# distribute this software and its documentation for any purpose and
+# without fee is hereby granted, provided that the above copyright
+# notice appear in all copies and that both that copyright notice and
+# this permission notice appear in supporting documentation, and that
+# the name of FundsXpress. not be used in advertising or publicity pertaining
+# to distribution of the software without specific, written prior
+# permission.  FundsXpress makes no representations about the suitability of
+# this software for any purpose.  It is provided "as is" without express
+# or implied warranty.
+# 
+# THIS SOFTWARE IS PROVIDED ``AS IS'' AND WITHOUT ANY EXPRESS OR
+# IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
+# WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
+#
+def _nfold(outlen, instr):
+    """instr is a string (which represents binary data, not unicode or
+    anything readable); outlen is a number of characters to output;
+    returns a string."""
+
+    # inbits and outbits are really byte counts.  This is an
+    # unfortunate artifact of the MIT implementation, which is easier
+    # to duplicate than to fix.
+
+    inbits = len(instr)
+    inarray = [ord(c) for c in instr]
+    outbits = outlen
+    outarray = [0] * outlen
+
+    def _lcm(a, b):
+        while b:
+            a, b = b, a % b
+        return a
+
+    lcm = outbits * inbits / _lcm(outbits, inbits)
+    byte = 0
+
+    # this will end up cycling through the input
+    # lcm(inlen,outlen)/inlen times, which is correct
+    for i in xrange(lcm - 1, -1, -1):
+        # compute the offset of the msbit in the input which gets
+        # added to this byte
+        msbit = (
+            # first, start with the msbit in the first, unrotated byte
+            ((inbits << 3) - 1) +
+            # then, for each byte, shift to the right for each repetition
+            (((inbits << 3) + 13) * (i / inbits)) +
+            # last, pick out the correct byte within that shifted repetition
+            ((inbits - (i % inbits)) << 3)
+            ) % (inbits << 3)
+
+        byte += (((inarray[((inbits - 1) - (msbit >> 3)) % inbits] << 8) |
+                  (inarray[((inbits) - (msbit >> 3)) % inbits])) >>
+                 ((msbit & 7) + 1))
+
+        byte += outarray[i % outbits]
+        outarray[i % outbits] = byte & 0xff
+
+        byte >>= 8
+
+    for i in xrange(outbits - 1, -1, -1):
+        if not byte:
+            break
+        byte += outarray[i]
+        outarray[i] = byte & 0xff;
+
+        byte >>= 8
+
+    return "".join([chr(i) for i in outarray])
+
 def _make_random_bytes(bytecount):
     r = random.SystemRandom()
     return "".join(chr(r.getrandbits(8)) for c in xrange(0, bytecount))
@@ -136,3 +235,11 @@ if __name__ == '__main__':
     assert Crc32.make_checksum("MASSACHVSETTS INSTITVTE OF TECHNOLOGY"
                                ) == "\xf7\x80\x41\xe3"
     assert Crc32.make_checksum("\x80\x00") == "\x4b\x98\x83\x3b"
+
+    assert _nfold(64, "012345") == "\xbe\x07\x26\x31\x27\x6b\x19\x55"
+    assert _nfold(56, "password") == "\x78\xa0\x7b\x6c\xaf\x85\xfa"
+    assert _nfold(64, "Rough Consensus, and Running Code") == \
+        "\xbb\x6e\xd3\x08\x70\xb7\xf0\xe0"
+
+    assert _nfold(168, "password") == \
+        "\x59\xe4\xa8\xca\x7c\x03\x85\xc3\xc3\x7b\x3f\x6d\x20\x00\x24\x7c\xb6\xe6\xbd\x5b\x3e"
