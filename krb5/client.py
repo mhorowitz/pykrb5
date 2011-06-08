@@ -1,7 +1,7 @@
 import os
 
 from . import ccache
-from . import engine
+from . import tgs_client
 from . import network
 from . import session
 from . import types
@@ -43,7 +43,7 @@ class Client(object):
             other_tgts += (s for s in self.ccache.sessions
                            if s.service.components[0] == "krbtgt")
 
-        kdc_session, new_tgts = engine.get_service(
+        kdc_session, new_tgts = tgs_client.get_service(
             network.KDCConnectionFactory(), client_tgt, service, other_tgts)
 
 #        for s in new_tgts:
