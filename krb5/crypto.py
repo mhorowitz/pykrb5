@@ -11,23 +11,6 @@ from . import types
 class ValidationException(types.KerberosException):
     pass
 
-"""
-      We first define a primitive called n-folding, which takes a
-      variable-length input block and produces a fixed-length output
-      sequence.  The intent is to give each input bit approximately
-      equal weight in determining the value of each output bit.  Note
-      that whenever we need to treat a string of octets as a number, the
-      assumed representation is Big-Endian -- Most Significant Byte
-      first.
-
-      To n-fold a number X, replicate the input value to a length that
-      is the least common multiple of n and the length of X.  Before
-      each repetition, the input is rotated to the right by 13 bit
-      positions.  The successive n-bit chunks are added together using
-      1's-complement addition (that is, with end-around carry) to yield
-      a n-bit result....
-"""
-
 # Assume input and output are multiples of 8 bits.  The _nfold
 # function is based on the MIT krb5_nfold C implementation:
 # 
@@ -57,8 +40,10 @@ class ValidationException(types.KerberosException):
 #
 def _nfold(outlen, instr):
     """instr is a string (which represents binary data, not unicode or
-    anything readable); outlen is a number of characters to output;
-    returns a string."""
+    anything readable); outlen is a number of bits to output (which
+    must be a multiple of 8); returns a string."""
+
+    assert outlen % 8 == 0
 
     # inbits and outbits are really byte counts.  This is an
     # unfortunate artifact of the MIT implementation, which is easier
@@ -66,11 +51,11 @@ def _nfold(outlen, instr):
 
     inbits = len(instr)
     inarray = [ord(c) for c in instr]
-    outbits = outlen
-    outarray = [0] * outlen
+    outbits = outlen / 8
+    outarray = [0] * outbits
 
     def _lcm(a, b):
-        while b:
+        while b != 0:
             a, b = b, a % b
         return a
 
@@ -93,7 +78,7 @@ def _nfold(outlen, instr):
 
         byte += (((inarray[((inbits - 1) - (msbit >> 3)) % inbits] << 8) |
                   (inarray[((inbits) - (msbit >> 3)) % inbits])) >>
-                 ((msbit & 7) + 1))
+                 ((msbit & 7) + 1)) & 0xff
 
         byte += outarray[i % outbits]
         outarray[i % outbits] = byte & 0xff
@@ -101,7 +86,7 @@ def _nfold(outlen, instr):
         byte >>= 8
 
     for i in xrange(outbits - 1, -1, -1):
-        if not byte:
+        if byte == 0:
             break
         byte += outarray[i]
         outarray[i] = byte & 0xff;
@@ -120,17 +105,25 @@ class Crc32(object):
         crc = (binascii.crc32(plaintext, 0xffffffff) ^ 0xffffffff) & 0xffffffff
         return struct.pack("<I", crc)
 
+class DesCbc(object):
+    def __init__(self, key, iv):
+        self.des = pyDes.des(key, pyDes.CBC, iv)
+
+    def encrypt(self, plaintext):
+        return self.des.encrypt(plaintext)
+
+    def decrypt(self, ciphertext):
+        return self.des.decrypt(ciphertext)
+
 class DesCbcCrcProfile(object):
     # confounder | checksum | msg | pad
 
     ZERO_CHECKSUM = "\0\0\0\0"
 
-    def __init__(self, key, ctor, enc, dec):
-        self.enc = enc
-        self.dec = dec
-        self.des = ctor(key, key)
+    def __init__(self, key):
+        self.des = DesCbc(key, key)
         sum_key = "".join(chr(ord(c) ^ 0xf0) for c in key)
-        self.sum_des = ctor(sum_key, '\0' * 8)
+        self.sum_des = DesCbc(sum_key, '\0' * 8)
 
     def encrypt(self, usage, plaintext):
         confounder = _make_random_bytes(8)
@@ -138,11 +131,11 @@ class DesCbcCrcProfile(object):
         pad = _make_random_bytes((8 - (unpad_len % 8)) % 8)
         checksum = Crc32.make_checksum(
             confounder + self.ZERO_CHECKSUM + plaintext + pad)
-        c = self.enc(self.des, confounder + checksum + plaintext + pad)
+        c = self.des.encrypt(confounder + checksum + plaintext + pad)
         return c
 
     def decrypt(self, usage, ciphertext):
-        dec_data = self.dec(self.des, ciphertext)
+        dec_data = self.des.decrypt(ciphertext)
         confounder = dec_data[0:8]
         checksum = dec_data[8:12]
         msg_pad = dec_data[12:]
@@ -152,24 +145,136 @@ class DesCbcCrcProfile(object):
             raise ValidationException
         return msg_pad
 
+    def required_checksum_type(self):
+        return constants.ChecksumType.rsa_md5_des
+
     def make_checksum(self, usage, plaintext):
         confounder = _make_random_bytes(8)
-        return self.enc(self.sum_des,
-                        confounder +
-                        hashlib.md5(confounder + plaintext).digest())
+        return self.sum_des.encrypt(
+            confounder + hashlib.md5(confounder + plaintext).digest())
 
     def verify_checksum(self, usage, plaintext, checksum):
-        dec_data = self.dec(self.sum_des, checksum)
+        dec_data = self.sum_des.decrypt(checksum)
         confounder = dec_data[0:8]
         checksum = dec_data[8:]
         calc_checksum = hashlib.md5(confounder + plaintext).digest()
         return checksum == calc_checksum
 
-class Key(object):
-    REQUIRED_CKSUM_TYPES = {
-        constants.EncType.des_cbc_crc: constants.ChecksumType.rsa_md5_des
-        }
+def _pad_len(unpad_len, multiple):
+    return (multiple - (unpad_len % multiple)) % multiple
 
+class HMac(object):
+    def __init__(self, hash, key):
+        self.hash = hash
+
+        padded_key = key
+        if len(padded_key) > hash.block_size:
+            padded_key = padded_key[:hash.block_size]
+        elif len(padded_key) < hash.block_size:
+            padded_key += "\0" * (hash.block_size - len(padded_key))
+
+        self.inner = self.hash.copy()
+        key_xor_ipad = "".join((chr(ord(c) ^ 0x36) for c in padded_key))
+        self.inner.update(key_xor_ipad)
+
+        self.outer = self.hash.copy()
+        key_xor_opad = "".join((chr(ord(c) ^ 0x5c) for c in padded_key))
+        self.outer.update(key_xor_opad)
+
+    def __call__(self, text):
+        icopy = inner.copy()
+        icopy.update(text)
+
+        ocopy = outer.copy()
+        ocopy.update(icopy.digest())
+
+        return ocopy.digest()
+
+class SimplifiedProfile(object):
+    # E(conf | plaintext | pad) | H(conf | plaintext | pad)
+
+    # This doesn't do any caching of derived keys.  If that turns out
+    # to be a performance problem, we can add it later.
+
+    # uses: hmac_output_size, hash, key_generation_size, random_to_key
+    # cipher_block_size, enc, dec
+
+    def __init__(self, key):
+        self.key = key
+
+    def derive_key(self, constant):
+        if len(constant) == self.cipher_block_size():
+            input = constant
+        else:
+            input = _nfold(self.cipher_block_size(), constant)
+
+        derived_key = ""
+
+        while len(derived_key) < self.key_generation_size():
+            enc_data = self.raw_encrypt(self.key, input)
+            derived_key += enc_data
+            input = enc_data
+        
+        return self.random_to_key(derived_key[:self.key_generation_size()])
+
+    def derive_key_usage(self, usage, octet):
+        return self.derive_key_usage(struct.pack(">Ib", usage, octet))
+
+    def hmac(self, usage, data):
+        hmac_func = HMac(self.hash, self.derive_key_usage(usage, 0x55))
+        return hmac_func(data)[:self.hmac_output_size()]
+
+    def encrypt(self, usage, plaintext):
+        confounder = _make_random_bytes(self.cipher_block_size())
+        unpad_len = len(confounder) + len(plaintext)
+        pad = _make_random_bytes(_pad_len(unpad_len, 8))
+        cpp = confounder + plaintext + pad
+        ke = self.derive_key_usage(usage, 0xaa)
+        return self.raw_encrypt(ke, cpp) + self.hmac(usage, cpp)
+
+    def decrypt(self, usage, ciphertext):
+        ke = self.derive_key_usage(usage, 0xaa)
+        plaintext = self.raw_decrypt(ke, ciphertext[:-self.hmac_output_size()])
+        if ciphertext[-self.hmac_output_size():] != self.hmac(usage, plaintext):
+            raise ValidationException
+        return plaintext
+
+    def make_checksum(self, usage, plaintext):
+        hmac_func = HMac(self.hash, self.derive_key_usage(usage, 0x99))
+        return hmac_func(usage, plaintext)
+
+    def verify_checksum(self, usage, plaintext, checksum):
+        return checksum == self.make_checksum(usage, plaintext)
+
+class Des3CbcHmacSha1KdProfile(object):
+    def key_generation_size(self):
+        return 21
+
+    def hash(self):
+        return hashlib.sha1()
+
+    def hmac_output_size(self):
+        return 20
+
+    def message_block_size(self):
+        return 8
+
+    def cipher_block_size(self):
+        return 8
+
+    def required_checksum_type(self):
+        return constants.ChecksumType.rsa_md5_des
+
+    def raw_encrypt(self, key, plaintext):
+        pass
+
+    def raw_decrypt(self, key, ciphertext):
+        pass
+
+    def random_to_key(self, data):
+        pass
+
+class Key(object):
     def __init__(self):
         self.etype = None
         self.kvno = None
@@ -184,11 +289,7 @@ class Key(object):
             return self._profile
 
         if self.etype == constants.EncType.des_cbc_crc:
-            self._profile = DesCbcCrcProfile(
-                self.data,
-                lambda key, iv: pyDes.des(key, pyDes.CBC, iv),
-                lambda des, plain: des.encrypt(plain),
-                lambda des, cipher: des.decrypt(cipher))
+            self._profile = DesCbcCrcProfile(self.data)
         else:
             raise types.KerberosException(
                 "Unusable etype {0}".format(self.etype))
@@ -224,22 +325,39 @@ class Key(object):
         return d
 
     def make_checksum_as_asn1(self, *args, **kwargs):
-        cksumtype = self.REQUIRED_CKSUM_TYPES[self.etype]
+        cksumtype = self.profile().required_checksum_type()
 
         return {"cksumtype": int(cksumtype),
                 "checksum": self.make_checksum(*args, **kwargs)}
 
 if __name__ == '__main__':
+    # Test vectors from RFC3961 A.5
+
     assert Crc32.make_checksum("foo") == "\x33\xbc\x32\x73"
     assert Crc32.make_checksum("test0123456789") == "\xd6\x88\x3e\xb8"
     assert Crc32.make_checksum("MASSACHVSETTS INSTITVTE OF TECHNOLOGY"
                                ) == "\xf7\x80\x41\xe3"
     assert Crc32.make_checksum("\x80\x00") == "\x4b\x98\x83\x3b"
 
+    # Test vectors from RFC3961 A.1
+
     assert _nfold(64, "012345") == "\xbe\x07\x26\x31\x27\x6b\x19\x55"
     assert _nfold(56, "password") == "\x78\xa0\x7b\x6c\xaf\x85\xfa"
     assert _nfold(64, "Rough Consensus, and Running Code") == \
-        "\xbb\x6e\xd3\x08\x70\xb7\xf0\xe0"
-
+           "\xbb\x6e\xd3\x08\x70\xb7\xf0\xe0"
     assert _nfold(168, "password") == \
-        "\x59\xe4\xa8\xca\x7c\x03\x85\xc3\xc3\x7b\x3f\x6d\x20\x00\x24\x7c\xb6\xe6\xbd\x5b\x3e"
+           "\x59\xe4\xa8\xca\x7c\x03\x85\xc3\xc3\x7b\x3f\x6d\x20\x00\x24\x7c\xb6\xe6\xbd\x5b\x3e"
+    assert _nfold(192, "MASSACHVSETTS INSTITVTE OF TECHNOLOGY") == \
+           "\xdb\x3b\x0d\x8f\x0b\x06\x1e\x60\x32\x82\xb3\x08\xa5\x08\x41\x22\x9a\xd7\x98\xfa\xb9\x54\x0c\x1b"
+    assert _nfold(168, "Q") == \
+           "\x51\x8a\x54\xa2\x15\xa8\x45\x2a\x51\x8a\x54\xa2\x15\xa8\x45\x2a\x51\x8a\x54\xa2\x15"
+    assert _nfold(168, "ba") == \
+           "\xfb\x25\xd5\x31\xae\x89\x74\x49\x9f\x52\xfd\x92\xea\x98\x57\xc4\xba\x24\xcf\x29\x7e"
+    assert _nfold(64, "kerberos") == \
+           "\x6b\x65\x72\x62\x65\x72\x6f\x73"
+    assert _nfold(128, "kerberos") == \
+           "\x6b\x65\x72\x62\x65\x72\x6f\x73\x7b\x9b\x5b\x2b\x93\x13\x2b\x93"
+    assert _nfold(168, "kerberos") == \
+           "\x83\x72\xc2\x36\x34\x4e\x5f\x15\x50\xcd\x07\x47\xe1\x5d\x62\xca\x7a\x5a\x3b\xce\xa4"
+    assert _nfold(256, "kerberos") == \
+           "\x6b\x65\x72\x62\x65\x72\x6f\x73\x7b\x9b\x5b\x2b\x93\x13\x2b\x93\x5c\x9b\xdc\xda\xd9\x5c\x98\x99\xc4\xca\xe4\xde\xe6\xd6\xca\xe4"
