@@ -322,9 +322,7 @@ class Key(object):
         return d
 
     def make_checksum_as_asn1(self, *args, **kwargs):
-        cksumtype = self.profile().required_checksum_type()
-
-        return {"cksumtype": int(cksumtype),
+        return {"cksumtype": int(self.profile().required_checksum_type()),
                 "checksum": self.make_checksum(*args, **kwargs)}
 
 if __name__ == '__main__':
