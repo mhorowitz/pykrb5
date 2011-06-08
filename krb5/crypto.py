@@ -182,10 +182,10 @@ class HMac(object):
         self.outer.update(key_xor_opad)
 
     def __call__(self, text):
-        icopy = inner.copy()
+        icopy = self.inner.copy()
         icopy.update(text)
 
-        ocopy = outer.copy()
+        ocopy = self.outer.copy()
         ocopy.update(icopy.digest())
 
         return ocopy.digest()
@@ -195,9 +195,6 @@ class SimplifiedProfile(object):
 
     # This doesn't do any caching of derived keys.  If that turns out
     # to be a performance problem, we can add it later.
-
-    # uses: hmac_output_size, hash, key_generation_size, random_to_key
-    # cipher_block_size, enc, dec
 
     def __init__(self, key):
         self.key = key
@@ -221,7 +218,7 @@ class SimplifiedProfile(object):
         return self.derive_key_usage(struct.pack(">Ib", usage, octet))
 
     def hmac(self, usage, data):
-        hmac_func = HMac(self.hash, self.derive_key_usage(usage, 0x55))
+        hmac_func = HMac(self.raw_hash(), self.derive_key_usage(usage, 0x55))
         return hmac_func(data)[:self.hmac_output_size()]
 
     def encrypt(self, usage, plaintext):
@@ -240,17 +237,17 @@ class SimplifiedProfile(object):
         return plaintext
 
     def make_checksum(self, usage, plaintext):
-        hmac_func = HMac(self.hash, self.derive_key_usage(usage, 0x99))
+        hmac_func = HMac(self.raw_hash(), self.derive_key_usage(usage, 0x99))
         return hmac_func(usage, plaintext)
 
     def verify_checksum(self, usage, plaintext, checksum):
         return checksum == self.make_checksum(usage, plaintext)
 
-class Des3CbcHmacSha1KdProfile(object):
+class Des3CbcHmacSha1KdProfile(SimplifiedProfile):
     def key_generation_size(self):
         return 21
 
-    def hash(self):
+    def raw_hash(self):
         return hashlib.sha1()
 
     def hmac_output_size(self):
@@ -361,3 +358,11 @@ if __name__ == '__main__':
            "\x83\x72\xc2\x36\x34\x4e\x5f\x15\x50\xcd\x07\x47\xe1\x5d\x62\xca\x7a\x5a\x3b\xce\xa4"
     assert _nfold(256, "kerberos") == \
            "\x6b\x65\x72\x62\x65\x72\x6f\x73\x7b\x9b\x5b\x2b\x93\x13\x2b\x93\x5c\x9b\xdc\xda\xd9\x5c\x98\x99\xc4\xca\xe4\xde\xe6\xd6\xca\xe4"
+
+    # Test vectors from RFC2104
+    assert HMac(hashlib.md5(), "\x0b" * 16)("Hi There") == \
+           "\x92\x94\x72\x7a\x36\x38\xbb\x1c\x13\xf4\x8e\xf8\x15\x8b\xfc\x9d"
+    assert HMac(hashlib.md5(), "Jefe")("what do ya want for nothing?") == \
+           "\x75\x0c\x78\x3e\x6a\xb0\xb5\x03\xea\xa8\x6e\x31\x0a\x5d\xb7\x38"
+    assert HMac(hashlib.md5(), "\xAA" * 16)("\xDD" * 50) == \
+           "\x56\xbe\x34\x52\x1d\x14\x4c\x88\xdb\xb8\xc7\x33\xf0\xe8\xb3\xf6"
