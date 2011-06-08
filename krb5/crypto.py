@@ -115,6 +115,16 @@ class DesCbc(object):
     def decrypt(self, ciphertext):
         return self.des.decrypt(ciphertext)
 
+class Des3Cbc(object):
+    def __init__(self, key, iv):
+        self.des = pyDes.triple_des(key, pyDes.CBC, iv)
+
+    def encrypt(self, plaintext):
+        return self.des.encrypt(plaintext)
+
+    def decrypt(self, ciphertext):
+        return self.des.decrypt(ciphertext)
+
 class DesCbcCrcProfile(object):
     # confounder | checksum | msg | pad
 
@@ -203,7 +213,7 @@ class SimplifiedProfile(object):
         if len(constant) == self.cipher_block_size():
             input = constant
         else:
-            input = _nfold(self.cipher_block_size(), constant)
+            input = _nfold(self.cipher_block_size() * 8, constant)
 
         derived_key = ""
 
@@ -215,7 +225,7 @@ class SimplifiedProfile(object):
         return self.random_to_key(derived_key[:self.key_generation_size()])
 
     def derive_key_usage(self, usage, octet):
-        return self.derive_key_usage(struct.pack(">Ib", usage, octet))
+        return self.derive_key(struct.pack(">IB", int(usage), octet))
 
     def hmac(self, usage, data):
         hmac_func = HMac(self.raw_hash(), self.derive_key_usage(usage, 0x55))
@@ -234,16 +244,63 @@ class SimplifiedProfile(object):
         plaintext = self.raw_decrypt(ke, ciphertext[:-self.hmac_output_size()])
         if ciphertext[-self.hmac_output_size():] != self.hmac(usage, plaintext):
             raise ValidationException
-        return plaintext
+        return plaintext[self.cipher_block_size():]
 
     def make_checksum(self, usage, plaintext):
         hmac_func = HMac(self.raw_hash(), self.derive_key_usage(usage, 0x99))
-        return hmac_func(usage, plaintext)
+        return hmac_func(plaintext)
 
     def verify_checksum(self, usage, plaintext, checksum):
         return checksum == self.make_checksum(usage, plaintext)
 
+def _compute_des_parity(octet):
+    parity = octet
+    parity ^= parity >> 4
+    parity ^= parity >> 2
+    parity ^= parity >> 1
+    if parity & 1 == 0:
+        octet ^= 1
+    return octet
+
+WEAK_DES_KEYS = set([
+    "\x01" * 8,
+    "\xfe" * 8,
+    "\xe0" * 4 + "\xf1" * 4,
+    "\xf1" * 4 + "\xe1" * 4,
+
+    "\x01\x1f\x01\x1f\x01\x0e\x01\x0e",
+    "\x1f\x01\x1f\x01\x0e\x01\x0e\x01",
+    "\x01\xe0\x01\xe0\x01\xf1\x01\xf1",
+    "\xe0\x01\xe0\x01\xf1\x01\xf1\x01",
+    "\x01\xfe\x01\xfe\x01\xfe\x01\xfe",
+    "\xfe\x01\xfe\x01\xfe\x01\xfe\x01",
+    "\x1f\xe0\x1f\xe0\x0e\xf1\x0e\xf1",
+    "\xe0\x1f\xe0\x1f\xf1\x0e\xf1\x0e",
+    "\x1f\xfe\x1f\xfe\x0e\xfe\x0e\xfe",
+    "\xfe\x1f\xfe\x1f\xfe\x0e\xfe\x0e",
+    "\xe0\xfe\xe0\xfe\xf1\xfe\xf1\xfe",
+    "\xfe\xe0\xfe\xe0\xfe\xf1\xfe\xf1"
+    ])
+
+def _des_random_to_key(data):
+    octets = [0] * 8
+    for i, ch in enumerate(data):
+        octets[i] = ord(ch)
+        octets[7] |= (octets[i] & 1) << (i + 1)
+    key = "".join((chr(_compute_des_parity(octet)) for octet in octets))
+    if key in WEAK_DES_KEYS:
+        octet[7] ^= 0xf0
+        key = "".join((chr(_compute_des_parity(octet)) for octet in octets))
+    return key
+
+def _des3_random_to_key(data):
+    return _des_random_to_key(data[0:7]) + \
+           _des_random_to_key(data[7:14]) + \
+           _des_random_to_key(data[14:21])
+
 class Des3CbcHmacSha1KdProfile(SimplifiedProfile):
+    ZEROES = "\0" * 8
+
     def key_generation_size(self):
         return 21
 
@@ -260,16 +317,16 @@ class Des3CbcHmacSha1KdProfile(SimplifiedProfile):
         return 8
 
     def required_checksum_type(self):
-        return constants.ChecksumType.rsa_md5_des
+        return constants.ChecksumType.hmac_sha1_des3_kd
 
     def raw_encrypt(self, key, plaintext):
-        pass
+        return Des3Cbc(key, self.ZEROES).encrypt(plaintext)
 
     def raw_decrypt(self, key, ciphertext):
-        pass
+        return Des3Cbc(key, self.ZEROES).decrypt(ciphertext)
 
     def random_to_key(self, data):
-        pass
+        return _des3_random_to_key(data)
 
 class Key(object):
     def __init__(self):
@@ -287,6 +344,8 @@ class Key(object):
 
         if self.etype == constants.EncType.des_cbc_crc:
             self._profile = DesCbcCrcProfile(self.data)
+        elif self.etype == constants.EncType.des3_cbc_sha1_kd:
+            self._profile = Des3CbcHmacSha1KdProfile(self.data)
         else:
             raise types.KerberosException(
                 "Unusable etype {0}".format(self.etype))
@@ -326,13 +385,13 @@ class Key(object):
                 "checksum": self.make_checksum(*args, **kwargs)}
 
 if __name__ == '__main__':
-    # Test vectors from RFC3961 A.5
-
-    assert Crc32.make_checksum("foo") == "\x33\xbc\x32\x73"
-    assert Crc32.make_checksum("test0123456789") == "\xd6\x88\x3e\xb8"
-    assert Crc32.make_checksum("MASSACHVSETTS INSTITVTE OF TECHNOLOGY"
-                               ) == "\xf7\x80\x41\xe3"
-    assert Crc32.make_checksum("\x80\x00") == "\x4b\x98\x83\x3b"
+    # Test vectors from RFC2104
+    assert HMac(hashlib.md5(), "\x0b" * 16)("Hi There") == \
+           "\x92\x94\x72\x7a\x36\x38\xbb\x1c\x13\xf4\x8e\xf8\x15\x8b\xfc\x9d"
+    assert HMac(hashlib.md5(), "Jefe")("what do ya want for nothing?") == \
+           "\x75\x0c\x78\x3e\x6a\xb0\xb5\x03\xea\xa8\x6e\x31\x0a\x5d\xb7\x38"
+    assert HMac(hashlib.md5(), "\xAA" * 16)("\xDD" * 50) == \
+           "\x56\xbe\x34\x52\x1d\x14\x4c\x88\xdb\xb8\xc7\x33\xf0\xe8\xb3\xf6"
 
     # Test vectors from RFC3961 A.1
 
@@ -357,10 +416,19 @@ if __name__ == '__main__':
     assert _nfold(256, "kerberos") == \
            "\x6b\x65\x72\x62\x65\x72\x6f\x73\x7b\x9b\x5b\x2b\x93\x13\x2b\x93\x5c\x9b\xdc\xda\xd9\x5c\x98\x99\xc4\xca\xe4\xde\xe6\xd6\xca\xe4"
 
-    # Test vectors from RFC2104
-    assert HMac(hashlib.md5(), "\x0b" * 16)("Hi There") == \
-           "\x92\x94\x72\x7a\x36\x38\xbb\x1c\x13\xf4\x8e\xf8\x15\x8b\xfc\x9d"
-    assert HMac(hashlib.md5(), "Jefe")("what do ya want for nothing?") == \
-           "\x75\x0c\x78\x3e\x6a\xb0\xb5\x03\xea\xa8\x6e\x31\x0a\x5d\xb7\x38"
-    assert HMac(hashlib.md5(), "\xAA" * 16)("\xDD" * 50) == \
-           "\x56\xbe\x34\x52\x1d\x14\x4c\x88\xdb\xb8\xc7\x33\xf0\xe8\xb3\xf6"
+    # Test vectors from RFC3961 A.3
+
+    assert Des3CbcHmacSha1KdProfile("\xdc\xe0\x6b\x1f\x64\xc8\x57\xa1\x1c\x3d\xb5\x7c\x51\x89\x9b\x2c\xc1\x79\x10\x08\xce\x97\x3b\x92").derive_key_usage(1, 0x55) == \
+           "\x92\x51\x79\xd0\x45\x91\xa7\x9b\x5d\x31\x92\xc4\xa7\xe9\xc2\x89\xb0\x49\xc7\x1f\x6e\xe6\x04\xcd"
+
+    assert Des3CbcHmacSha1KdProfile("\x5e\x13\xd3\x1c\x70\xef\x76\x57\x46\x57\x85\x31\xcb\x51\xc1\x5b\xf1\x1c\xa8\x2c\x97\xce\xe9\xf2").derive_key_usage(1, 0xaa) == \
+           "\x9e\x58\xe5\xa1\x46\xd9\x94\x2a\x10\x1c\x46\x98\x45\xd6\x7a\x20\xe3\xc4\x25\x9e\xd9\x13\xf2\x07"
+
+    # Test vectors from RFC3961 A.5
+
+    assert Crc32.make_checksum("foo") == "\x33\xbc\x32\x73"
+    assert Crc32.make_checksum("test0123456789") == "\xd6\x88\x3e\xb8"
+    assert Crc32.make_checksum("MASSACHVSETTS INSTITVTE OF TECHNOLOGY"
+                               ) == "\xf7\x80\x41\xe3"
+    assert Crc32.make_checksum("\x80\x00") == "\x4b\x98\x83\x3b"
+

@@ -225,6 +225,7 @@ class EncType(flufl.enum.Enum):
 
 class ChecksumType(flufl.enum.Enum):
     rsa_md5_des = 8
+    hmac_sha1_des3_kd = 12
 
 class KeyUsageValue(flufl.enum.Enum):
     tgs_req_auth_data_session = 4
