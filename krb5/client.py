@@ -42,6 +42,9 @@ class Client(object):
     def get_pw_session(self, prompter, client=None, service=None):
         if client is None:
             client = self.get_principal()
+            # TODO marc: do something useful if there's no ccache.
+            # This requires a notion of default realm, which we
+            # currently do not have.
         else:
             client = types.Principal(client)
         if service is None:
