@@ -14,7 +14,8 @@ for s in fcc.sessions:
     print "{0}  {1}  {2}".format(
         s.start_time.strftime(TIME_FORMAT), s.end_time.strftime(TIME_FORMAT),
         s.service)
-    print "\trenew until {0}".format(s.renew_until.strftime(TIME_FORMAT))
+    if s.renew_until is not None:
+        print "\trenew until {0}".format(s.renew_until.strftime(TIME_FORMAT))
     print "\tFlags: {0}".format(
         ", ".join([f.enumname for f in s.ticket_flags]))
     print "\tEtype (skey, tkt): {0}, {1}".format(
