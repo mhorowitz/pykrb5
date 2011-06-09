@@ -312,7 +312,10 @@ class File(object):
             File._pack_write(file, '!H', ad.type)
             File._write_data(file, ad.data)
 
-def resolve(name):
+def resolve(name=None):
+    if name is None:
+        name = os.getenv('KRB5CCNAME')        
+
     left, colon, right = name.partition(":")
     if left == 'FILE':
         return File(right)

@@ -30,8 +30,8 @@ def terminal_prompter(prompts, name=None, banner=None):
 class Client(object):
     def __init__(self, cc=None):
         if cc is None:
-            self.ccache = ccache.resolve(os.getenv("KRB5CCNAME"))
-        elif isinstance(ccache, basestring):
+            self.ccache = ccache.resolve()
+        elif isinstance(cc, basestring):
             self.ccache = ccache.resolve(cc)
         else:
             self.ccache = cc

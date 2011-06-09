@@ -1,8 +1,6 @@
-import os
-
 import krb5.ccache
 
-fcc = krb5.ccache.resolve(os.getenv('KRB5CCNAME'))
+fcc = krb5.ccache.resolve()
 
 TIME_FORMAT = "%m/%d/%y %H:%M:%S"
 
