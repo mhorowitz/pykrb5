@@ -215,8 +215,7 @@ class KerberosTime(object):
             day=dt.day,
             hour=dt.hour,
             minute=dt.minute,
-            second=dt.second,
-            msec=int(dt.microsecond * 1000))
+            second=dt.second)
 
     @staticmethod
     def from_asn1(data):
