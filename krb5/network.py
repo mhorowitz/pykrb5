@@ -43,7 +43,6 @@ class KDCConnectionFactory(object):
         realms = {"ATHENA.MIT.EDU" : (('kerberos.mit.edu', 88),),
                   "NERD-MILITIA.ORG" : (('kerberos.nerd-militia.org', 88),),
                   "1TS.ORG" : (('kerberos.1ts.org', 88),),
-                  "TOYBOX.ORG" : (('69.25.196.68', 88),),
                   }
         
         if realm not in realms:
