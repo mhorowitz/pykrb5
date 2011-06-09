@@ -1,11 +1,15 @@
 import contextlib
+import datetime
 import fcntl
 import os
 import socket
 import StringIO
 import struct
-import datetime
+import time
 
+from pyasn1.codec.der import decoder, encoder
+
+from . import asn1
 from . import constants
 from . import crypto
 from . import session
@@ -30,6 +34,7 @@ class File(object):
         with self._locked_file('r+b') as f:
             header, principal, sessions = self._read(f)
             sessions.append(session)
+            f.seek(0)
             self._write(f, header, principal, sessions)
 
     @property
@@ -152,7 +157,31 @@ class File(object):
         return header, principal, sessions
 
     def _write(self, file, header, principal, sessions):
-        pass
+        self._pack_write(file, '!H', self._FVNO_4)
+        self._write_header_tags(file, header)
+        self._write_principal(file, principal)
+
+        for s in sessions:
+            self._write_principal(file, s.client)
+            self._write_principal(file, s.service)
+            self._write_key(file, s.key)
+            self._write_time(file, s.auth_time)
+            self._write_time(file, s.start_time)
+            self._write_time(file, s.end_time)
+            self._write_time(file, s.renew_until)
+            self._pack_write(file, 'B', 0 if s.u2u_ticket is None else 1)
+            self._write_ticket_flags(file, s.ticket_flags or 0)
+            self._write_addresses(file, s.addresses or [])
+            self._write_authdata(file, [])
+            ticket = asn1.Ticket()
+            s.ticket.to_asn1(ticket)
+            self._write_data(file, encoder.encode(ticket))
+            if s.u2u_ticket is not None:
+                u2u_ticket = asn1.Ticket()
+                s.u2u_ticket.to_asn1(u2u_ticket)
+                self._write_data(file, encoder.encode(u2u_ticket))
+            else:
+                self._write_data(file, "")
 
     @staticmethod
     def _read_header_tags(file):
@@ -173,15 +202,15 @@ class File(object):
     @staticmethod
     def _write_header_tags(file, tags):
         with File._string_io() as tagsfile:
-            value = tags['time_offset']
+            value = tags.get('time_offset')
             if value:
                 sec = int(value)
                 usec = value - sec
-                _pack_write(tagsfile, '!HHii',
-                            File._TAG_DELTATIME, struct.calcsize('!ii'),
-                            sec, usec)
+                File._pack_write(tagsfile, '!HHii',
+                                 File._TAG_DELTATIME, struct.calcsize('!ii'),
+                                 sec, usec)
             buf = tagsfile.getvalue()
-            _pack_write(file, '!H', len(buf))
+            File._pack_write(file, '!H', len(buf))
             file.write(buf)
 
     @staticmethod
@@ -197,9 +226,21 @@ class File(object):
         return princ
 
     @staticmethod
+    def _write_principal(file, princ):
+        File._pack_write(file, '!ii', princ.type, len(princ.components))
+        File._write_data(file, princ.realm)
+        for c in princ.components:
+            File._write_data(file, c)
+
+    @staticmethod
     def _read_data(file):
         size, = File._read_unpack(file, '!i')
         return file.read(size)
+
+    @staticmethod
+    def _write_data(file, data):
+        File._pack_write(file, '!i', len(data))
+        file.write(data)
 
     @staticmethod
     def _read_key(file):
@@ -213,14 +254,31 @@ class File(object):
         return key
 
     @staticmethod
+    def _write_key(file, key):
+        File._pack_write(file, '!H', int(key.etype))
+        File._write_data(file, key.data)
+
+    @staticmethod
     def _read_time(file):
         return datetime.datetime.fromtimestamp(File._read_unpack(file, '!i')[0])
+
+    @staticmethod
+    def _write_time(file, dt):
+        if dt is None:
+            dt = 0
+        else:
+            dt = time.mktime(dt.timetuple())
+        File._pack_write(file, '!i', dt)
 
     @staticmethod
     def _read_ticket_flags(file):
         flags = constants.TicketFlags()
         flags.from_bitmask(File._read_unpack(file, '!i')[0])
         return flags
+
+    @staticmethod
+    def _write_ticket_flags(file, flags):
+        File._pack_write(file, '!i', flags.to_bitmask())
 
     @staticmethod
     def _read_addresses(file):
@@ -234,11 +292,25 @@ class File(object):
         return addrs
 
     @staticmethod
+    def _write_addresses(file, addresses):
+        File._pack_write(file, '!i', len(addresses))
+        for addr in addresses:
+            File._pack_write(file, '!H', addr.type)
+            File._write_data(file, addr.data)
+
+    @staticmethod
     def _read_authdata(file):
         count, = File._read_unpack(file, '!i')
         for c in xrange(0, count):
             type, = File._read_unpack(file, '!H')
             data = File._read_data(file)
+
+    @staticmethod
+    def _write_authdata(file, authdata):
+        File._pack_write(file, '!i', len(authdata))
+        for ad in authdata:
+            File._pack_write(file, '!H', ad.type)
+            File._write_data(file, ad.data)
 
 def resolve(name):
     left, colon, right = name.partition(":")
