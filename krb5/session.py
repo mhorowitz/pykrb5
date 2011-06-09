@@ -61,7 +61,7 @@ class Session(object):
         asn1.seq_set_flags(ap_req, 'ap-options', constants.APOptions())
         asn1.seq_set(ap_req, 'ticket', self.ticket.to_asn1)
         asn1.seq_set_dict(ap_req, 'authenticator', 
-                          self.key.encrypt_as_asn1(
+                          self.key.encrypted_data(
                               auth_key_usage, encoder.encode(authenticator)))
 
         return encoder.encode(ap_req)
@@ -72,6 +72,8 @@ class KDCSession(Session):
     def __init__(self):
         Session.__init__(self)
         self.last_requests = {}
+        # AS only, only if provided in preauthentication.
+        self.kdc_time = None
 
 class ApplicationSession(Session):
     # This is the full set of stuff shared between the client and service.

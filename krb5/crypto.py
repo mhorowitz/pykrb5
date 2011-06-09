@@ -1,10 +1,12 @@
 import binascii
 import hashlib
+import itertools
 import random
 import struct
 
 import pyDes
 
+from . import asn1
 from . import constants
 from . import types
 
@@ -99,6 +101,90 @@ def _make_random_bytes(bytecount):
     r = random.SystemRandom()
     return "".join(chr(r.getrandbits(8)) for c in xrange(0, bytecount))
 
+def _pad_len(unpad_len, multiple):
+    return (multiple - (unpad_len % multiple)) % multiple
+
+def _compute_des_parity(octet):
+    parity = octet
+    parity ^= parity >> 4
+    parity ^= parity >> 2
+    parity ^= parity >> 1
+    if parity & 1 == 0:
+        octet ^= 1
+    return octet
+
+WEAK_DES_KEYS = set([
+    "\x01" * 8,
+    "\xfe" * 8,
+    "\xe0" * 4 + "\xf1" * 4,
+    "\x1f" * 4 + "\x0e" * 4,
+
+    "\x01\x1f\x01\x1f\x01\x0e\x01\x0e",
+    "\x1f\x01\x1f\x01\x0e\x01\x0e\x01",
+    "\x01\xe0\x01\xe0\x01\xf1\x01\xf1",
+    "\xe0\x01\xe0\x01\xf1\x01\xf1\x01",
+    "\x01\xfe\x01\xfe\x01\xfe\x01\xfe",
+    "\xfe\x01\xfe\x01\xfe\x01\xfe\x01",
+    "\x1f\xe0\x1f\xe0\x0e\xf1\x0e\xf1",
+    "\xe0\x1f\xe0\x1f\xf1\x0e\xf1\x0e",
+    "\x1f\xfe\x1f\xfe\x0e\xfe\x0e\xfe",
+    "\xfe\x1f\xfe\x1f\xfe\x0e\xfe\x0e",
+    "\xe0\xfe\xe0\xfe\xf1\xfe\xf1\xfe",
+    "\xfe\xe0\xfe\xe0\xfe\xf1\xfe\xf1"
+    ])
+
+def _des_octets_to_key(octets):
+    key = "".join((chr(_compute_des_parity(octet)) for octet in octets))
+    if key in WEAK_DES_KEYS:
+        octets[7] ^= 0xf0
+        key = "".join((chr(_compute_des_parity(octet)) for octet in octets))
+    return key
+
+def _des_random_to_key(data):
+    octets = [0] * 8
+    for i, ch in enumerate(data):
+        octets[i] = ord(ch)
+        octets[7] |= (octets[i] & 1) << (i + 1)
+    return _des_octets_to_key(octets)
+
+def _des3_random_to_key(data):
+    return _des_random_to_key(data[0:7]) + \
+           _des_random_to_key(data[7:14]) + \
+           _des_random_to_key(data[14:21])
+
+def _mit_des_string_to_key(text, salt):
+    text = text.encode("utf-8")
+    salt = salt.encode("utf-8")
+
+    s = text + salt + "\0" * _pad_len(len(text) + len(salt), 8)
+
+    def shift_7bit(n):
+        return (n & 0x7f) << 1
+
+    def reverse_7bit(n):
+        ret = 0
+        for i in xrange(0, 7):
+            if n & (1 << i) != 0:
+                ret |= 1 << (7 - i)
+        return ret
+
+    octets = [0] * 8
+
+    s16 = s + "\0" * _pad_len(len(s), 16)
+    # from grouper() recipe in itertools doc
+    args = [iter(s16)] * 16
+    for chunk in itertools.izip_longest(*args):
+        octets = itertools.imap(lambda a, b, c: a ^ b ^ c, octets,
+                                (shift_7bit(ord(ch)) for ch in chunk[0:8]),
+                                (reverse_7bit(ord(ch)) for ch in chunk[15:7:-1])
+                                )
+
+        octets = [o for o in octets]
+
+    tempkey = _des_octets_to_key(octets)
+    key = DesCbc(tempkey, tempkey).encrypt(s)[-8:]
+    return _des_octets_to_key((ord(ch) for ch in key))
+
 class Crc32(object):
     @staticmethod
     def make_checksum(plaintext):
@@ -131,14 +217,16 @@ class DesCbcCrcProfile(object):
     ZERO_CHECKSUM = "\0\0\0\0"
 
     def __init__(self, key):
-        self.des = DesCbc(key, key)
-        sum_key = "".join(chr(ord(c) ^ 0xf0) for c in key)
-        self.sum_des = DesCbc(sum_key, '\0' * 8)
+        # TODO marc: see the comment in Key.set_data_from_string
+        if key is not None:
+            self.des = DesCbc(key, key)
+            sum_key = "".join(chr(ord(c) ^ 0xf0) for c in key)
+            self.sum_des = DesCbc(sum_key, '\0' * 8)
 
     def encrypt(self, usage, plaintext):
         confounder = _make_random_bytes(8)
         unpad_len = len(confounder) + len(self.ZERO_CHECKSUM) + len(plaintext)
-        pad = _make_random_bytes((8 - (unpad_len % 8)) % 8)
+        pad = _make_random_bytes(_pad_len(unpad_len, 8))
         checksum = Crc32.make_checksum(
             confounder + self.ZERO_CHECKSUM + plaintext + pad)
         c = self.des.encrypt(confounder + checksum + plaintext + pad)
@@ -170,8 +258,8 @@ class DesCbcCrcProfile(object):
         calc_checksum = hashlib.md5(confounder + plaintext).digest()
         return checksum == calc_checksum
 
-def _pad_len(unpad_len, multiple):
-    return (multiple - (unpad_len % multiple)) % multiple
+    def string_to_key(self, text, salt):
+        return _mit_des_string_to_key(text, salt)
 
 class HMac(object):
     def __init__(self, hash, key):
@@ -209,7 +297,7 @@ class SimplifiedProfile(object):
     def __init__(self, key):
         self.key = key
 
-    def derive_key(self, constant):
+    def derive_key(self, base_key, constant):
         if len(constant) == self.cipher_block_size():
             input = constant
         else:
@@ -218,14 +306,14 @@ class SimplifiedProfile(object):
         derived_key = ""
 
         while len(derived_key) < self.key_generation_size():
-            enc_data = self.raw_encrypt(self.key, input)
+            enc_data = self.raw_encrypt(base_key, input)
             derived_key += enc_data
             input = enc_data
         
         return self.random_to_key(derived_key[:self.key_generation_size()])
 
     def derive_key_usage(self, usage, octet):
-        return self.derive_key(struct.pack(">IB", int(usage), octet))
+        return self.derive_key(self.key, struct.pack(">IB", int(usage), octet))
 
     def hmac(self, usage, data):
         hmac_func = HMac(self.raw_hash(), self.derive_key_usage(usage, 0x55))
@@ -252,51 +340,6 @@ class SimplifiedProfile(object):
 
     def verify_checksum(self, usage, plaintext, checksum):
         return checksum == self.make_checksum(usage, plaintext)
-
-def _compute_des_parity(octet):
-    parity = octet
-    parity ^= parity >> 4
-    parity ^= parity >> 2
-    parity ^= parity >> 1
-    if parity & 1 == 0:
-        octet ^= 1
-    return octet
-
-WEAK_DES_KEYS = set([
-    "\x01" * 8,
-    "\xfe" * 8,
-    "\xe0" * 4 + "\xf1" * 4,
-    "\xf1" * 4 + "\xe1" * 4,
-
-    "\x01\x1f\x01\x1f\x01\x0e\x01\x0e",
-    "\x1f\x01\x1f\x01\x0e\x01\x0e\x01",
-    "\x01\xe0\x01\xe0\x01\xf1\x01\xf1",
-    "\xe0\x01\xe0\x01\xf1\x01\xf1\x01",
-    "\x01\xfe\x01\xfe\x01\xfe\x01\xfe",
-    "\xfe\x01\xfe\x01\xfe\x01\xfe\x01",
-    "\x1f\xe0\x1f\xe0\x0e\xf1\x0e\xf1",
-    "\xe0\x1f\xe0\x1f\xf1\x0e\xf1\x0e",
-    "\x1f\xfe\x1f\xfe\x0e\xfe\x0e\xfe",
-    "\xfe\x1f\xfe\x1f\xfe\x0e\xfe\x0e",
-    "\xe0\xfe\xe0\xfe\xf1\xfe\xf1\xfe",
-    "\xfe\xe0\xfe\xe0\xfe\xf1\xfe\xf1"
-    ])
-
-def _des_random_to_key(data):
-    octets = [0] * 8
-    for i, ch in enumerate(data):
-        octets[i] = ord(ch)
-        octets[7] |= (octets[i] & 1) << (i + 1)
-    key = "".join((chr(_compute_des_parity(octet)) for octet in octets))
-    if key in WEAK_DES_KEYS:
-        octet[7] ^= 0xf0
-        key = "".join((chr(_compute_des_parity(octet)) for octet in octets))
-    return key
-
-def _des3_random_to_key(data):
-    return _des_random_to_key(data[0:7]) + \
-           _des_random_to_key(data[7:14]) + \
-           _des_random_to_key(data[14:21])
 
 class Des3CbcHmacSha1KdProfile(SimplifiedProfile):
     ZEROES = "\0" * 8
@@ -328,6 +371,14 @@ class Des3CbcHmacSha1KdProfile(SimplifiedProfile):
     def random_to_key(self, data):
         return _des3_random_to_key(data)
 
+    def string_to_key(self, text, salt):
+        text = text.encode("utf-8")
+        salt = salt.encode("utf-8")
+
+        s = text + salt
+        tmpkey = self.random_to_key(_nfold(168, s))
+        return self.derive_key(tmpkey, "kerberos")
+
 class Key(object):
     def __init__(self):
         self.etype = None
@@ -337,6 +388,15 @@ class Key(object):
 
     def __str__(self):
         return str((self.etype, "{0} octets".format(len(self.data))))
+
+    def set_data_from_string(self, text, salt):
+        self.data = self.profile().string_to_key(text, salt)
+        # This set up a keyless profile, so we delete it so it can be
+        # recreated again with the key now that it's set.  TODO marc:
+        # refactor the profile into a keyless type and a keyed typel
+        # so this hack won't be needed. (also see
+        # DesCbcCrcProfile.__init__)
+        self._profile = None
 
     def profile(self):
         if self._profile is not None:
@@ -370,15 +430,23 @@ class Key(object):
 
     def from_asn1(self, data):
         self.etype = constants.EncType(data.getComponentByName("keytype"))
-        self.data = data.getComponentByName("keyvalue")
+        self.data = str(data.getComponentByName("keyvalue"))
         return self
 
-    def encrypt_as_asn1(self, *args, **kwargs):
+    def encrypted_data(self, *args, **kwargs):
         d = {"etype": int(self.etype),
              "cipher": self.encrypt(*args, **kwargs)}
         if self.kvno is not None:
             d["kvno"] = self.kvno
         return d
+
+    def encrypt_as_asn1(self, *args, **kwargs):
+        enc_data = asn1.EncryptedData()
+        enc_data.setComponentByName('etype', int(self.etype))
+        if self.kvno is not None:
+            enc_data.setComponentByName('kvno', self.kvno)
+        enc_data.setComponentByName('cipher', self.encrypt(*args, **kwargs))
+        return enc_data
 
     def make_checksum_as_asn1(self, *args, **kwargs):
         return {"cksumtype": int(self.profile().required_checksum_type()),
@@ -416,6 +484,21 @@ if __name__ == '__main__':
     assert _nfold(256, "kerberos") == \
            "\x6b\x65\x72\x62\x65\x72\x6f\x73\x7b\x9b\x5b\x2b\x93\x13\x2b\x93\x5c\x9b\xdc\xda\xd9\x5c\x98\x99\xc4\xca\xe4\xde\xe6\xd6\xca\xe4"
 
+    # Test vectors from RFC3961 A.2
+
+    assert _mit_des_string_to_key("password", "ATHENA.MIT.EDUraeburn") == \
+           "\xcb\xc2\x2f\xae\x23\x52\x98\xe3"
+    assert _mit_des_string_to_key("potatoe", "WHITEHOUSE.GOVdanny") == \
+           "\xdf\x3d\x32\xa7\x4f\xd9\x2a\x01"
+    assert _mit_des_string_to_key(u"\U0001d11e", "EXAMPLE.COMpianist") == \
+           "\x4f\xfb\x26\xba\xb0\xcd\x94\x13"
+    assert _mit_des_string_to_key(u"\xdf", u"ATHENA.MIT.EDUJuri\u0161i\u0107") == \
+           "\x62\xc8\x1a\x52\x32\xb5\xe6\x9d"
+    assert _mit_des_string_to_key("11119999", "AAAAAAAA") == \
+           "\x98\x40\x54\xd0\xf1\xa7\x3e\x31"
+    assert _mit_des_string_to_key("NNNN6666", "FFFFAAAA") == \
+           "\xc4\xbf\x6b\x25\xad\xf7\xa4\xf8"
+
     # Test vectors from RFC3961 A.3
 
     assert Des3CbcHmacSha1KdProfile("\xdc\xe0\x6b\x1f\x64\xc8\x57\xa1\x1c\x3d\xb5\x7c\x51\x89\x9b\x2c\xc1\x79\x10\x08\xce\x97\x3b\x92").derive_key_usage(1, 0x55) == \
@@ -423,6 +506,22 @@ if __name__ == '__main__':
 
     assert Des3CbcHmacSha1KdProfile("\x5e\x13\xd3\x1c\x70\xef\x76\x57\x46\x57\x85\x31\xcb\x51\xc1\x5b\xf1\x1c\xa8\x2c\x97\xce\xe9\xf2").derive_key_usage(1, 0xaa) == \
            "\x9e\x58\xe5\xa1\x46\xd9\x94\x2a\x10\x1c\x46\x98\x45\xd6\x7a\x20\xe3\xc4\x25\x9e\xd9\x13\xf2\x07"
+
+    # Test vectors from RFC3961 A.4
+
+    def des3string_to_key(text, salt):
+        return Des3CbcHmacSha1KdProfile(None).string_to_key(text, salt)
+
+    assert des3string_to_key("password", "ATHENA.MIT.EDUraeburn") == \
+           "\x85\x0b\xb5\x13\x58\x54\x8c\xd0\x5e\x86\x76\x8c\x31\x3e\x3b\xfe\xf7\x51\x19\x37\xdc\xf7\x2c\x3e"
+    assert des3string_to_key("potatoe", "WHITEHOUSE.GOVdanny") == \
+           "\xdf\xcd\x23\x3d\xd0\xa4\x32\x04\xea\x6d\xc4\x37\xfb\x15\xe0\x61\xb0\x29\x79\xc1\xf7\x4f\x37\x7a"
+    assert des3string_to_key("penny", "EXAMPLE.COMbuckaroo") == \
+           "\x6d\x2f\xcd\xf2\xd6\xfb\xbc\x3d\xdc\xad\xb5\xda\x57\x10\xa2\x34\x89\xb0\xd3\xb6\x9d\x5d\x9d\x4a"
+    assert des3string_to_key(u"\xdf", u"ATHENA.MIT.EDUJuri\u0161i\u0107") == \
+           "\x16\xd5\xa4\x0e\x1c\xe3\xba\xcb\x61\xb9\xdc\xe0\x04\x70\x32\x4c\x83\x19\x73\xa7\xb9\x52\xfe\xb0"
+    assert des3string_to_key(u"\U0001d11e", "EXAMPLE.COMpianist") == \
+           "\x85\x76\x37\x26\x58\x5d\xbc\x1c\xce\x6e\xc4\x3e\x1f\x75\x1f\x07\xf1\xc4\xcb\xb0\x98\xf4\x0b\x19"
 
     # Test vectors from RFC3961 A.5
 

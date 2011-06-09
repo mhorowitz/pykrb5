@@ -1,10 +1,31 @@
+import getpass
 import os
+import sys
 
 from . import ccache
 from . import tgs_client
 from . import network
 from . import session
 from . import types
+
+def terminal_prompter(prompts, name=None, banner=None):
+    if name:
+        print name
+    if banner:
+        print banner
+
+    inputs = []
+
+    for text, hidden in prompts:
+        if hidden:
+            value = getpass.getpass(text + ": ")
+        else:
+            print text,
+            value = sys.stdin.readline()
+            value = value.rstrip("\n")
+        inputs.append(value)
+
+    return inputs
 
 class Client(object):
     def __init__(self, cc=None):
@@ -18,11 +39,29 @@ class Client(object):
     def get_principal(self):
         return self.ccache.principal
 
+    def get_pw_session(self, prompter, client=None, service=None):
+        if client is None:
+            client = self.get_principal()
+        else:
+            client = types.Principal(client)
+        if service is None:
+            service = types.Principal(("krbtgt", client.realm, client.realm))
+        else:
+            service = types.Principal(service)
+
+        kdc_session = tgs_client.get_initial_service(
+            network.KDCConnectionFactory(), prompter, client, service)
+
+        self.ccache.create(client)
+        self.ccache.store(kdc_session)
+
+        return kdc_session
+
     def get_kdc_session(self, service):
         service = types.Principal(service)
 
         kdc_session = next((s for s in self.ccache.sessions
-                        if s.service == service), None)
+                            if s.service == service), None)
         if kdc_session:
             return kdc_session
 
@@ -46,10 +85,10 @@ class Client(object):
         kdc_session, new_tgts = tgs_client.get_service(
             network.KDCConnectionFactory(), client_tgt, service, other_tgts)
 
-#        for s in new_tgts:
-#            self.ccache.store(s)
-#        if service_session is not None:
-#            self.ccache.store(service_session)
+        for s in new_tgts:
+            self.ccache.store(s)
+        if kdc_session is not None:
+            self.ccache.store(kdc_session)
 
         return kdc_session
 

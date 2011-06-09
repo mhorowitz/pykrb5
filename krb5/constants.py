@@ -104,12 +104,16 @@ class Asn1Tags(flufl.enum.Enum):
     tgs_rep = 13
     ap_req = 14
     ap_rep = 15
+    enc_as_rep_part = 25
     enc_tgs_rep_part = 26
     krb_error = 30
 
-class PreauthTypes(flufl.enum.Enum):
+class PADataTypes(flufl.enum.Enum):
     tgs_req = 1
     enc_timestamp = 2
+    etype_info = 11
+    sam_response = 13
+    etype_info2 = 19
 
 class TicketFlag(flufl.enum.Enum):
     reserved = 0
@@ -228,6 +232,8 @@ class ChecksumType(flufl.enum.Enum):
     hmac_sha1_des3_kd = 12
 
 class KeyUsageValue(flufl.enum.Enum):
+    as_req_pa_enc_timestamp = 1
+    as_rep_enc_part = 3
     tgs_req_auth_data_session = 4
     tgs_req_auth_data_subkey = 5
     pa_tgs_req_checksum = 6

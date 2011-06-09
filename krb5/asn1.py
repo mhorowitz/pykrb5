@@ -181,6 +181,9 @@ class KDCReq(univ.Sequence):
         _sequence_component('req-body', 4, KDCReqBody())
         )
 
+class ASReq(KDCReq):
+    tagSet = _application_tag(constants.Asn1Tags.as_req)
+
 class TGSReq(KDCReq):
     tagSet = _application_tag(constants.Asn1Tags.tgs_req)
 
@@ -196,6 +199,9 @@ class KDCRep(univ.Sequence):
         _sequence_component('ticket', 5, Ticket()),
         _sequence_component('enc-part', 6, EncryptedData())
         )
+
+class ASRep(KDCRep):
+    tagSet = _application_tag(constants.Asn1Tags.as_rep)
 
 class TGSRep(KDCRep):
     tagSet = _application_tag(constants.Asn1Tags.tgs_rep)
@@ -221,6 +227,9 @@ class EncKDCRepPart(univ.Sequence):
         _sequence_component('sname', 10, PrincipalName()),
         _sequence_optional_component('caddr', 11, HostAddresses())
         )
+
+class EncASRepPart(EncKDCRepPart):
+    tagSet = _application_tag(constants.Asn1Tags.enc_as_rep_part)
 
 class EncTGSRepPart(EncKDCRepPart):
     tagSet = _application_tag(constants.Asn1Tags.enc_tgs_rep_part)
@@ -270,3 +279,32 @@ class KrbError(univ.Sequence):
         _sequence_optional_component('e-text', 11, KerberosString()),
         _sequence_optional_component('e-data', 12, univ.OctetString())
         )
+
+class MethodData(univ.SequenceOf):
+    componentType = PAData()
+
+class PAEncTimestamp(EncryptedData):
+    pass
+
+class PAEncTSEnc(univ.Sequence):
+    componentType = namedtype.NamedTypes(
+        _sequence_component('patimestamp', 0, KerberosTime()),
+        _sequence_optional_component('pausec', 1, Microseconds()))
+
+class ETypeInfoEntry(univ.Sequence):
+    componentType = namedtype.NamedTypes(
+        _sequence_component('etype', 0, Int32()),
+        _sequence_optional_component('salt', 1, univ.OctetString()))
+
+class ETypeInfo(univ.SequenceOf):
+    componentType = ETypeInfoEntry()
+
+class ETypeInfo2Entry(univ.Sequence):
+    componentType = namedtype.NamedTypes(
+        _sequence_component('etype', 0, Int32()),
+        _sequence_optional_component('salt', 1, KerberosString()),
+        _sequence_optional_component('a2kparams', 2, univ.OctetString()))
+
+class ETypeInfo2(univ.SequenceOf):
+    componentType = ETypeInfo2Entry()
+
