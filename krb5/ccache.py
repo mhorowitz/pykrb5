@@ -3,6 +3,7 @@ import datetime
 import fcntl
 import os
 import socket
+import sys
 import StringIO
 import struct
 import time
@@ -63,9 +64,18 @@ class File(object):
             header, principal, sessions = self._read(f)
             self._write(f, header, principal, value)
 
-    _LOCKDATA = 'hhllhh'
     _FVNO_4 = 0x0504
     _TAG_DELTATIME = 1
+
+    # Use fcntl instead of a higher-level locking package
+    # for compatibility with the MIT implementation.
+    @staticmethod
+    def lock_file(f, locktype):
+        if sys.platform == "darwin":
+            lockdata = struct.pack('@qqlhh', 0, 0, 0, locktype, 0)
+        else:
+            lockdata = struct.pack('@hhllhh', locktype, 0, 0, 0, 0, 0)
+        fcntl.fcntl(f, fcntl.F_SETLKW, lockdata)
 
     @contextlib.contextmanager
     def _locked_file(self, mode):
@@ -75,16 +85,11 @@ class File(object):
             else:
                 locktype = fcntl.F_WRLCK
 
-            # Use fcntl instead of a higher-level locking package
-            # for compatibility with the MIT implementation.
-            lockdata = struct.pack(self._LOCKDATA, locktype, 0, 0, 0, 0, 0)
-            fcntl.fcntl(f, fcntl.F_SETLKW, lockdata)
+            self.lock_file(f, locktype)
             try:
                 yield f
             finally:
-                lockdata = struct.pack(self._LOCKDATA, fcntl.F_UNLCK,
-                                       0, 0, 0, 0, 0)
-#                fcntl.fcntl(f, fcntl.F_SETLKW, lockdata)
+                self.lock_file(f, fcntl.F_UNLCK)
 
     @staticmethod
     @contextlib.contextmanager
